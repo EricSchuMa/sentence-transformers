@@ -6,6 +6,7 @@ from tqdm import tqdm, trange
 from ..util import cos_sim, dot_score
 import os
 import numpy as np
+import wandb
 from typing import List, Tuple, Dict, Set, Callable
 
 
@@ -34,8 +35,10 @@ class InformationRetrievalEvaluator(SentenceEvaluator):
                  batch_size: int = 32,
                  name: str = '',
                  write_csv: bool = True,
+                 log_to_wandb: bool = False,
+                 wandb_run: wandb.run = None,
                  score_functions: List[Callable[[Tensor, Tensor], Tensor] ] = {'cos_sim': cos_sim, 'dot_score': dot_score},       #Score function, higher=more similar
-                 main_score_function: str = None
+                 main_score_function: str = None,
                  ):
 
         self.queries_ids = []
@@ -60,6 +63,8 @@ class InformationRetrievalEvaluator(SentenceEvaluator):
         self.batch_size = batch_size
         self.name = name
         self.write_csv = write_csv
+        self.log_to_wandb = log_to_wandb
+        self.wandb_run = wandb_run
         self.score_functions = score_functions
         self.score_function_names = sorted(list(self.score_functions.keys()))
         self.main_score_function = main_score_function
@@ -96,6 +101,9 @@ class InformationRetrievalEvaluator(SentenceEvaluator):
         logger.info("Information Retrieval Evaluation on " + self.name + " dataset" + out_txt)
 
         scores = self.compute_metrices(model, *args, **kwargs)
+
+        if self.log_to_wandb and self.wandb_run is not None:
+            self.log_wandb_metrics(epoch, steps, scores)
 
         # Write results to disc
         if output_path is not None and self.write_csv:
@@ -298,17 +306,27 @@ class InformationRetrievalEvaluator(SentenceEvaluator):
             dcg += relevances[i] / np.log2(i + 2)  #+2 as we start our idx at 0
         return dcg
 
+    def log_wandb_metrics(self, epoch, steps, scores):
+        def log_score_function(name):
+            for k in self.accuracy_at_k:
+                self.wandb_run.log({'eval' + f"/{name}/accuracy@{k}": scores[name]['accuracy@k'][k]})
 
+            for k in self.precision_recall_at_k:
+                self.wandb_run.log({'eval' + f"/{name}/recall@{k}": scores[name]['recall@k'][k]})
+                self.wandb_run.log({'eval' + f"/{name}/precision@{k}": scores[name]['precision@k'][k]})
 
+            for k in self.mrr_at_k:
+                self.wandb_run.log({'eval' + f"/{name}/mrr@{k}": scores[name]['mrr@k'][k]})
 
+            for k in self.ndcg_at_k:
+                self.wandb_run.log({'eval' + f"/{name}/ndcg@{k}": scores[name]['ndcg@k'][k]})
 
+            for k in self.map_at_k:
+                self.wandb_run.log({'eval' + f"/{name}/map@{k}": scores[name]['map@k'][k]})
 
-
-
-
-
-
-
-
-
-
+        if epoch != -1:
+            if self.main_score_function is not None:
+                log_score_function(self.main_score_function)
+            else:
+                for name in self.score_function_names:
+                    log_score_function(name)
